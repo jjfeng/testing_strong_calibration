@@ -20,3 +20,6 @@ We run experiments using the `nestly` and `scons` framework. In particular,
 
 ## Running unittests:
 Code is in `test.py`. Run `python -m unittest`.
+
+### Random notes:
+Make an `_output` folder when running commands, since that is the default folder we output results in.
