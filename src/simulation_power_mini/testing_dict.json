@@ -1,0 +1,16 @@
+{
+    "zero_weights": [0,0.1],
+    "RandomForestRegressor": {
+        "max_features": [0.5,0.99],
+        "max_depth": [4,8],
+        "n_estimators": [2000]
+    },
+    "KernelLogistic": {
+        "nys__n_components": [100],
+        "nys__gamma": [1],
+        "nys__degree": [2],
+        "lr__max_iter": [2000],
+        "lr__penalty": ["l2"],
+        "lr__C": [1000,100,10]
+    }
+}

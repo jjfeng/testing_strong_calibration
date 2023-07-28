@@ -37,7 +37,7 @@ def parse_args():
     parser.add_argument(
         "--x-ticks",
         type=str,
-        default="400,800,1200,1600",
+        default="400+800+1200+1600",
     )
     parser.add_argument(
         "--proposed-only",
@@ -58,7 +58,7 @@ def parse_args():
     parser.add_argument(
         "--log-file",
         type=str,
-        default="_output/log.txt",
+        default="log.txt",
     )
     parser.add_argument(
         "--tex-file",
@@ -68,7 +68,6 @@ def parse_args():
     parser.add_argument(
         "--csv-file",
         type=str,
-        default="_output/res.csv",
     )
     parser.add_argument(
         "--do-agg",

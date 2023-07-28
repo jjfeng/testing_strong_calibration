@@ -1,0 +1,8 @@
+{
+    "RandomForestClassifier": {
+        "max_features": [0.1,0.2,0.4],
+        "max_depth": [5,8,14],
+        "n_estimators": [100],
+        "class_weight": ["balanced"]
+    }
+}

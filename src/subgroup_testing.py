@@ -393,7 +393,6 @@ def main():
     # Save results
     if args.plot_file is not None:
         plot_df.to_csv(args.plot_file, index=False)
-        detector.plot(plot_df, "_output/test.png")
 
     if args.detector_file:
         detector.clean_for_saving(res)
