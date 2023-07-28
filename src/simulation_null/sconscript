@@ -1,0 +1,355 @@
+import os
+
+from os.path import join
+from nestly.scons import SConsWrap
+from nestly import Nest
+from SCons.Script import Environment, Command, AddOption
+import numpy as np
+
+Import('env')
+localenv = env.Clone()
+
+# Set up state
+nest = SConsWrap(Nest(), localenv['output'], alias_environment=localenv)
+
+BETA = [0.6,0.4,0.2]
+ALPHA = 0.1
+SPLIT = 0.75
+N_BOOT = 800
+CV = 4
+TEST_SIZES = [100,200,400,800,1600]
+NUM_SEEDS = 100
+
+nest.add_aggregate("num_p_res", list)
+nest.add(
+    'test_group',
+    ['replace']
+)
+nest.add(
+    'num_p',
+    [
+        10
+    ],
+    label_func=lambda c: "p_%d" % c)
+
+nest.add(
+    'n_train',
+    [10000],
+    label_func=lambda c: "train_%d" % c)
+
+nest.add_aggregate('tolerance_res', list)
+nest.add(
+    'tolerance',
+    [0.05],
+    label_func=lambda c: "tol_%.2f" % c
+)
+
+@nest.add_target_with_env(localenv)
+def make_data(env, outdir, c):
+    targets = [
+        join(outdir, 'dataSEED.pkl'),
+    ]
+
+    orig_cmd = [
+        'make_dataset.py',
+        '--train',
+        'simple',
+        '--test',
+        c['test_group'],
+        '--n-train',
+        c['n_train'],
+        '--n-test',
+        max(TEST_SIZES),
+        '--n-bigtest',
+        5000,
+        '--orig-beta',
+        ",".join(map(str, BETA)),
+        '--orig-intercept',
+        0,
+        '--new-beta',
+        ",".join(map(str, BETA)),
+        '--new-intercept',
+        np.log((0.5 + c['tolerance'])/(1 - 0.5 - c['tolerance'])),
+        '--num-p',
+        c['num_p'],
+	    '--out ${TARGETS[0]}',
+    ]
+    cmd = [
+        'python run_script.py',
+        '--cluster',
+        localenv['cluster'],
+        '--target-template-file',
+        '${TARGETS[0]}',
+        '--num-seeds',
+        NUM_SEEDS,
+        '--run-line="%s"' % ' '.join(map(str, orig_cmd)),
+    ]
+    return env.Command(
+        targets,
+        [],
+        ' '.join(map(str, cmd)))
+
+nest.add_aggregate('ml_mdl_res', list)
+nest.add(
+    'ml_model',
+    [
+        'LogisticRegression',
+    ]
+)
+
+@nest.add_target_with_env(localenv)
+def train_ml(env, outdir, c):
+    targets = [
+        join(outdir, 'mdl_SEED.pkl'),
+        join(outdir, 'log_ml_SEED.txt'),
+        join(outdir, 'plot_ml_SEED.png'),
+    ]
+    orig_cmd = [
+        'train_ml.py',
+        '--model',
+        c['ml_model'],
+        '--param',
+        'simulation_null/model_dict.json',
+        '--dataset ${SOURCES[0]}',
+        '--mdl ${TARGETS[0]}',
+        '--log ${TARGETS[1]}',
+        '--plot ${TARGETS[2]}',
+    ]
+    cmd = [
+        'python run_script.py',
+        '--cluster',
+        localenv['cluster'],
+        '--target-template-file',
+        '${TARGETS[0]}',
+        '--num-seeds',
+        NUM_SEEDS,
+        '--run-line="%s"' % ' '.join(map(str, orig_cmd)),
+    ]
+    return env.Command(
+        targets,
+        c['make_data'],
+        ' '.join(map(str, cmd)))
+
+nest.add(
+    'alternative',
+    [
+        'both',
+        'greater'
+    ]
+)
+nest.add_aggregate('size_res', list)
+nest.add(
+    'n_test',
+    TEST_SIZES,
+    label_func=lambda c: "test_%d" % c)
+
+nest.add_aggregate('method_res', list)
+nest.add(
+    'detector',
+    lambda c: [
+        'CVScore%s' % ('TwoSided' if c['alternative'] == 'both' else ''),
+    ])
+
+nest.add(
+    'detection_model',
+    lambda c: [
+        'RandomForestRegressor_KernelLogistic',
+        ] if ('Split' in c['detector']) or ('CV' in c['detector']) else [None]
+)
+
+@nest.add_target_with_env(localenv)
+def test_deviation(env, outdir, c):
+    is_score = 'Score' in c['detector']
+    targets = ([
+            join(outdir, 'logSEED.txt'),
+            join(outdir, 'resSEED.csv'),
+        ] + (
+            [
+                join(outdir, 'plot_curvesSEED.csv'),
+                join(outdir, 'detectorSEED.pkl')
+            ] if is_score else []
+        )
+    )
+    orig_cmd = [
+        'subgroup_testing.py',
+        '--detection-model %s' % c['detection_model'] if c['detection_model'] is not None else '',
+        '--detection-params',
+        'simulation_null/testing_dict.json',
+        '--n-test',
+        c['n_test'],
+        '--alternative',
+        c['alternative'],
+        '--tolerance',
+        c['tolerance'],
+        '--detector',
+        c['detector'],
+        '--alpha',
+        ALPHA,
+        '--split %f' % SPLIT if 'Split' in c['detector'] else '',
+        '--cv %d' % CV if 'CV' in c['detector'] else '',
+        '--n-boot',
+        N_BOOT,
+        '--dataset ${SOURCES[0]}',
+        '--mdl ${SOURCES[1]}',
+        '--log ${TARGETS[0]}',
+        '--res ${TARGETS[1]}',
+        '--detector-file ${TARGETS[3]}' if is_score else '',
+        '--plot ${TARGETS[2]}' if is_score else ''
+    ]
+    cmd = [
+        'python run_script.py',
+        '--cluster',
+        localenv['cluster'],
+        '--target-template-file',
+        '${TARGETS[0]},${TARGETS[1]}' + (',${TARGETS[2]}' if is_score else ''),
+        '--num-seeds',
+        NUM_SEEDS,
+        '--run-line="%s"' % ' '.join(map(str, orig_cmd)),
+    ]
+    return env.Command(
+        targets,
+        [
+            c['make_data'][0],
+            c['train_ml'][0]
+        ],
+        ' '.join(map(str, cmd)))
+
+@nest.add_target_with_env(localenv)
+def summarize(env, outdir, c):
+    targets = [
+            join(outdir, 'log.txt'),
+            join(outdir, 'res.csv'),
+            join(outdir, 'pvals.png'),
+        ]
+    cmd = [
+        'python aggregate.py',
+        '--num-seeds',
+        NUM_SEEDS,
+        '--detector-name',
+        "%s_%s" % (c['detector'],c['detection_model']),
+        '--alpha',
+        ALPHA,
+        '--result-files ${SOURCES[1]}',
+        '--log ${TARGETS[0]}',
+        '--csv-file ${TARGETS[1]}',
+        '--pval-plot ${TARGETS[2]}',
+    ]
+    c['method_res'].append(targets[1])
+    return env.Command(
+        targets,
+        c['test_deviation'],
+        ' '.join(map(str, cmd)))
+
+nest.pop('detector')
+
+@nest.add_target_with_env(localenv)
+def summarize(env, outdir, c):
+    res = '+'.join([join('simulation_null', a) for a in c['method_res']])
+    targets = [
+        join(outdir, 'res.csv'),
+        join(outdir, 'log.txt'),
+    ]
+    cmd = [
+        'python concat_files.py',
+        '--extra-label-val',
+        c['n_test'],
+        '--extra-label-name',
+        'n_test',
+        '--result-files',
+        res,
+        '--csv-file ${TARGETS[0]}',
+        '--log-file ${TARGETS[1]}',
+    ]
+    c['size_res'].append(targets[0])
+    return env.Command(
+        targets,
+        c['method_res'],
+        ' '.join(map(str, cmd)))
+
+nest.pop('n_test')
+@nest.add_target_with_env(localenv)
+def summarize(env, outdir, c):
+    res = '+'.join([join('simulation_null', a) for a in c['size_res']])
+    targets = [
+        join(outdir, 'res.csv'),
+        join(outdir, 'log.txt'),
+    ]
+    cmd = [
+        'python concat_files.py',
+        '--extra-label-val',
+        c['alternative'],
+        '--extra-label-name',
+        'alternative',
+        '--result-files',
+        res,
+        '--csv-file ${TARGETS[0]}',
+        '--log-file ${TARGETS[1]}',
+    ]
+    c['ml_mdl_res'].append(targets[0])
+    return env.Command(
+        targets,
+        c['size_res'],
+        ' '.join(map(str, cmd)))
+
+nest.pop('alternative')
+
+@nest.add_target_with_env(localenv)
+def summarize(env, outdir, c):
+    res = '+'.join([join('simulation_null', a) for a in c['ml_mdl_res']])
+    targets = [
+        join(outdir, 'res.csv'),
+        join(outdir, 'log.txt'),
+    ]
+    cmd = [
+        'python concat_files.py',
+        '--extra-label-val',
+        c['tolerance'],
+        '--extra-label-name',
+        'tolerance',
+        '--result-files',
+        res,
+        '--csv-file ${TARGETS[0]}',
+        '--log-file ${TARGETS[1]}',
+    ]
+    c['tolerance_res'].append(targets[0])
+    return env.Command(
+        targets,
+        c['ml_mdl_res'],
+        ' '.join(map(str, cmd)))
+
+nest.pop('tolerance')
+
+@nest.add_target_with_env(localenv)
+def summarize(env, outdir, c):
+    res = '+'.join([join('simulation_null', a) for a in c['tolerance_res']])
+    targets = [
+        join(outdir, 'res.csv'),
+        join(outdir, 'res.tex'),
+        join(outdir, 'plot.png'),
+    ]
+    cmd = [
+        'python concat_files.py',
+        '--x-ticks',
+        ','.join([str(n) for n in TEST_SIZES]),
+        '--type-i-error',
+        '--proposed-only',
+        '--plot-x',
+        'n_test',
+        '--plot-y',
+        '"reject"',
+        '--plot-row',
+        'tolerance',
+        '--plot-col',
+        'alternative',
+        '--plot-hue',
+        'detector_method',
+        '--result-files',
+        res,
+        '--csv-file ${TARGETS[0]}',
+        '--tex-file ${TARGETS[1]}',
+        '--plot-file ${TARGETS[2]}',
+    ]
+    return env.Command(
+        targets,
+        c['tolerance_res'],
+        ' '.join(map(str, cmd)))

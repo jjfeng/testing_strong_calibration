@@ -1,0 +1,8 @@
+{
+    "RandomForestRegressor": {
+        "max_features": [0.5,0.7],
+        "max_depth": [5,8],
+        "n_estimators": [100]
+    }
+}
+    
