@@ -1,5 +1,7 @@
 # Code for "Is this model reliable for everyone? Testing for strong calibration"
 
+Feng, Jean, Alexej Gossmann, Romain Pirracchio, Nicholas Petrick, Gene Pennello, and Berkman Sahiner. 2023. “Is This Model Reliable for Everyone? Testing for Strong Calibration.” arXiv [cs.LG]. arXiv. http://arxiv.org/abs/2307.15247.
+
 This folder contains all the code for reproducing experiments from the manuscript.
 
 ## General organization of the code:
