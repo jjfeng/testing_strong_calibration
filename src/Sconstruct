@@ -30,3 +30,6 @@ sc.SConscript(flag + '/sconscript', exports=['flag'])
 
 flag = 'exp_zsfg'
 sc.SConscript(flag + '/sconscript', exports=['flag'])
+
+flag = 'exp_civil_comments'
+sc.SConscript(flag + '/sconscript', exports=['flag'])

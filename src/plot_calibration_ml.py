@@ -20,6 +20,7 @@ from sklearn.metrics import roc_auc_score
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.calibration import CalibrationDisplay
 
+from calibrator import MyCalibratedClassifier
 from common import get_n_jobs
 from subgroup_testing import load_test_data
 from detector import *
@@ -35,15 +36,16 @@ def parse_args():
         help="random seed",
     )
     parser.add_argument(
-        "--feature-subset-regex",
-        type=str,
-        default=None,
-    )
-    parser.add_argument(
         "--features",
         type=str,
         default="",
         help="which features to plot calibration curve for",
+    )
+    parser.add_argument(
+        "--feature-subset-regex",
+        type=str,
+        default="",
+        help="which features to use for subgroup",
     )
     parser.add_argument(
         "--tolerance",
@@ -102,20 +104,30 @@ def main():
         ml_mdl = pickle.load(f)
 
     np_X, np_Y, true_mu, feature_names, test_axes = load_test_data(args)
-    print(feature_names)
+    np_X = np_X[:,ml_mdl.train_axes]
+    
     # Hack for zsfg, but I guess it works for other code too
     feature_names = np.array([f_name.replace("simpleimputer__demographic_", "").replace("pipeline-1__demographic_", "").replace("remainder__", "") for f_name in feature_names])
     print(feature_names)
     
+    
     sns.set_context('paper', font_scale=1.8)
-    BINS = 2
+    BINS = 3
     if args.features:
         _, axs = plt.subplots(nrows=len(args.features),
                 ncols=BINS,figsize=(BINS * 5, len(args.features) * 3.5))
         for feat_idx, feat in enumerate(args.features):
             print("FEATURE", feat)
             feat_ax = np.where(feature_names == feat)[0][0]
-            feat_hist_n, feat_bins = np.histogram(np_X[:,feat_ax], bins=BINS)
+            if np.unique(np_X[:,feat_ax]).size == 2:
+                feat_bins = [0,0.5]
+            else:
+                feat_bins = np.quantile(np_X[:,feat_ax], q=np.arange(0,1,0.99/BINS))
+            print("feat_bins", feat_bins)
+
+            # plt.clf()
+            # plt.hist(np_X[:, feat_ax])
+            # plt.show()
 
             for bin_idx in range(len(feat_bins) - 1):
                 display_name = "%s %.1f-%.1f" % (
@@ -130,6 +142,7 @@ def main():
                     np_X[feat_mask],
                     np_Y.flatten()[feat_mask],
                     n_bins=7,
+                    strategy='quantile',
                     name=display_name,
                     ax=curr_ax,
                     ref_line=False)
@@ -147,8 +160,7 @@ def main():
                 curr_ax.set_ylabel('Event rate')
                 curr_ax.set_xlim((0,1))
                 curr_ax.set_ylim((0,1))
-                curr_ax.set_title("Age %s %.1f" % ("<" if bin_idx == 0 else ">",
-                    feat_bins[1]))
+                curr_ax.set_title("%s [%.1f,%.1f]" % (feat, feat_bins[bin_idx], feat_bins[bin_idx + 1]))
                 curr_ax.get_legend().remove()
             sns.despine()
         plt.tight_layout()

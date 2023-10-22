@@ -12,12 +12,13 @@ import seaborn as sns
 from sklearn.inspection import permutation_importance
 from sklearn.linear_model import LogisticRegression, LinearRegression
 from sklearn.model_selection import TimeSeriesSplit, KFold, ParameterGrid
+from sklearn.calibration import CalibrationDisplay
 
 from common import make_prob, to_safe_logit
 
 LINEAR_MODELS = ["Lasso", "LogisticRegression", "KernelLogistic"]
 CLASSIFIERS = ["LogisticRegression", "KernelLogistic"]
-REGRESSORS = ["Lasso", "LinearRegression", "RandomForestRegressor"]
+REGRESSORS = ["Lasso", "LinearRegression", "RandomForestRegressor", "GradientBoostingRegressor"]
 
 class SubgroupDetector:
     """
@@ -29,7 +30,7 @@ class SubgroupDetector:
             and whether we are testing if the true prob is greater or less
         """
         test_sign = 1 if test_greater else -1
-        assert (pred_prob.max() < 1) and (pred_prob.min() > 0)
+        assert (pred_prob.max() <= 1) and (pred_prob.min() >= 0)
         null_prob = make_prob(pred_prob + test_sign * self.tolerance_prob)
         residual = test_sign * (np_Y - null_prob)
         return residual
@@ -87,7 +88,7 @@ class SubgroupDetector:
 
         @param test_greater: are we testing if the true probabilities are greater than predicted
         """
-        pred_prob = ml_mdl.predict_proba(np_X)[:, 1]
+        pred_prob = ml_mdl.predict_proba(np_X[:, ml_mdl.train_axes])[:, 1]
 
         # Compute test statistic
         test_stats_df = self._calc_test_stats(
@@ -194,6 +195,86 @@ class HosmerLemeshow(SubgroupDetector):
         test_stats = pd.Series(hl_stat_dict)
         return test_stats
 
+class WidmannKernelTest(SubgroupDetector):
+    """
+    See Widmann 2019
+    """
+    main_statistic = "widmann"
+    one_sided = False
+
+    def __init__(self, axes: List[int], n_boot: int, tolerance_prob: float, alternative: str):
+        """
+        Uses the total variation distance for the kernel using the median heuristic
+
+        @param axes: a list of which pre-defined axes to bin the data and perform an H-L test.
+                    -1 means to bin along the predicted probabilities
+        @param n_boot: number of bootstrap samples
+        @param tolerance_prob: probability within tolerance rance
+        @param alternative: both
+        """
+        self.axes = axes
+        self.n_boot = n_boot
+        self.tolerance_prob = 0
+        self.boot_tolerance_prob = tolerance_prob
+        self.alternative = alternative
+        
+    def _calc_test_stats(
+        self, np_X, np_Y, pred_prob, test_greater=True, gamma: float = 1
+    ) -> pd.Series:
+        residuals = self._get_residual(np_Y, pred_prob, test_greater)
+
+        # CalibrationDisplay.from_predictions(np_Y, pred_prob) 
+        # plt.show()
+        
+        kernel_calib = 0
+        for i in range(residuals.size):
+            kernel_weights = np.exp(-np.abs(pred_prob[i] - np.delete(pred_prob, i))/gamma)
+            kernel_calib += np.mean(residuals[i] * kernel_weights * np.delete(residuals, i))/(residuals.size - 1)
+        
+        print("kernel test", kernel_calib)
+        
+        return pd.Series({self.main_statistic: kernel_calib})
+
+    def _test_two_sided(
+        self, np_X: np.ndarray, np_Y: np.ndarray, ml_mdl
+    ):
+        """
+        Performs the one-sided test. Calculates the critical value using Monte Carlo procedure to
+        control finite-sample Type I error.
+        """
+        pred_prob = ml_mdl.predict_proba(np_X[:, ml_mdl.train_axes])[:, 1]
+        gamma =  np.median(np.abs(pred_prob.reshape((-1,1)) - pred_prob.reshape((1,-1))))
+
+        # Compute test statistic
+        test_stats_df = self._calc_test_stats(
+            np_X, np_Y, pred_prob, gamma=gamma
+        )
+        print("test statistics", test_stats_df)
+        logging.info("test statistics")
+        logging.info(test_stats_df)
+        
+        # Simulate the test statistic under the worst-case null distribution
+        # This null distribution is different, because it is actually calculating a residual squared.
+        boot_dfs = []
+        for i in range(self.n_boot):
+            perturbed_mu = make_prob(pred_prob - self.boot_tolerance_prob)
+            sampled_y = np.random.binomial(n=1, p=perturbed_mu, size=pred_prob.size)
+            boot_df = self._calc_test_stats(
+                np_X, sampled_y, pred_prob, gamma=gamma
+            )
+            boot_dfs.append(boot_df)
+        boot_dfs = pd.concat(boot_dfs)
+
+        # Summarize results
+        pvals = []
+        for col_name in test_stats_df.index:
+            pvals.append(pd.DataFrame({
+                "method": [col_name],
+                "pval": [np.mean(test_stats_df[col_name] <= boot_dfs[col_name])]
+            }))
+
+        return pd.concat(pvals), None
+
 class SplitTesting(SubgroupDetector):
     """
     Sample splitting for testing subgroups, only does one-sided
@@ -238,7 +319,7 @@ class SplitTesting(SubgroupDetector):
         """
         Which features to extract for predicting residuals
         """
-        pred_logit = np.log(pred_prob/(1 - pred_prob)).reshape((-1,1))
+        pred_logit = to_safe_logit(pred_prob).reshape((-1,1))
         return np.concatenate([pred_logit, np_X[:, self.axes]], axis=1)
     
     def _get_pred_vals(self, residual_mdl, np_X_aug, pred_prob, detector_name, test_greater):
@@ -334,7 +415,7 @@ class SplitTesting(SubgroupDetector):
         valid_idxs = idxs[n_train:]
         return train_idxs, valid_idxs
 
-    def _simulate_null_res(self, pred_prob_valid, pred_val_list, detector_meta_df, test_greater=True):
+    def _simulate_null_res(self, pred_prob_valid, pred_val_list, detector_meta_df, test_greater: bool):
         """
         Simulate the test statistic under the worst-case null distribution
         @return simulated test statistics under the null
@@ -357,7 +438,7 @@ class SplitTesting(SubgroupDetector):
         Run test, get test statistic
         """
         np.random.seed(self.random_state)
-        pred_prob = ml_mdl.predict_proba(np_X)[:, 1]
+        pred_prob = ml_mdl.predict_proba(np_X[:, ml_mdl.train_axes])[:, 1]
         train_idxs, valid_idxs = self._get_train_valid_idxs(np_Y)
         residual = self._get_residual(np_Y, pred_prob, test_greater).reshape((1,-1))
         
@@ -368,7 +449,7 @@ class SplitTesting(SubgroupDetector):
         # Get the predictions from all the detectors
         pred_val_list = self._get_pred_val_list(self.detectors, self.detector_meta_df, np_X, pred_prob, valid_idxs, test_greater)
         # Get test statistic for the observed data
-        test_stats_df, plot_df = self._get_test_stats(pred_val_list, self.detector_meta_df, residual[:,valid_idxs], pred_prob=pred_prob[valid_idxs], do_print=True)
+        test_stats_df, plot_df = self._get_test_stats(pred_val_list, self.detector_meta_df, residual[:,valid_idxs], pred_prob=pred_prob[valid_idxs], test_greater=test_greater, do_print=True)
 
         print(test_stats_df)
         logging.info("test statistics %s", test_stats_df)
@@ -616,10 +697,10 @@ class CVTesting(SplitTesting):
         )
 
     def _test_one_sided(
-        self, np_X, np_Y, ml_mdl, test_greater=True
+        self, np_X, np_Y, ml_mdl, test_greater: bool
     ):
         np.random.seed(self.random_state)
-        pred_prob = ml_mdl.predict_proba(np_X)[:, 1]
+        pred_prob = ml_mdl.predict_proba(np_X[:, ml_mdl.train_axes])[:, 1]
         residuals = self._get_residual(np_Y, pred_prob, test_greater).reshape((1,-1))
         
         kf = KFold(n_splits=self.cv)
@@ -645,7 +726,7 @@ class CVTesting(SplitTesting):
 
         # Simulate the test statistic under the worst-case null distribution
         boot_dfs = self._simulate_null_res(pred_prob, all_pred_vals, self.detector_meta_df, test_greater)
-        boot_dfs = self._simulate_null_res(pred_prob, all_pred_vals, self.detector_meta_df)
+
         test_stats_df['pval'] = [np.mean(test_stats_df.test_stat[col_name] <= boot_dfs[col_name]) for col_name in test_stats_df.index]        
         test_stats_df['method'] = test_stats_df.index
         test_stats_df = test_stats_df.merge(self.detector_meta_df, how="inner", left_on="selected_model", right_on="model_idx")
@@ -686,7 +767,7 @@ class CVTestingTwoSided(SplitTesting):
     ):
         logging.info("CV TESTING")
         np.random.seed(self.random_state)
-        pred_prob = ml_mdl.predict_proba(np_X)[:, 1]
+        pred_prob = ml_mdl.predict_proba(np_X[:, ml_mdl.train_axes])[:, 1]
         residuals_greater = self._get_residual(np_Y, pred_prob, test_greater=True).reshape((1,-1))
         residuals_less = -self._get_residual(np_Y, pred_prob, test_greater=False).reshape((1,-1))
         
@@ -866,7 +947,6 @@ class SplitScore(SplitTesting):
         test_stats_df = pd.concat(test_stats_list).reset_index(drop=True)
         if do_print:
             logging.info("orig test stats %s", test_stats_df)
-            print(test_stats_df)
 
         # find the best model
         test_stats_z_df = test_stats_df.iloc[test_stats_df.groupby(['replicate', 'agg', 'z_func']).test_stat.idxmax()].rename({'model': 'selected_model', 'z_func': 'selected_z_func'}, axis=1)
@@ -903,6 +983,7 @@ class SplitScore(SplitTesting):
                 legend=False)
             print(a._legend_data)
             cols = sns.color_palette()
+            # TODO: FIX UP PLOTTING COLOR
             name_to_color = {
                 'Random Forest': cols[0],
                 'Kernel Logistic': cols[1],
@@ -1020,12 +1101,12 @@ class CVScore(CVTesting, SplitScore):
         assert self.alternative != "both"
         test_greater = self.alternative == "greater"
         
-        pred_prob = orig_ml_mdl.predict_proba(test_X)[:,1]
+        pred_prob = orig_ml_mdl.predict_proba(test_X[:, orig_ml_mdl.train_axes])[:,1]
         test_X_aug = self._get_x_features(test_X, pred_prob)
         
         residuals = self._get_residual(test_Y, pred_prob, test_greater=test_greater).reshape((1,-1))
         
-        mdl_pred_logit = np.log(pred_prob/(1 - pred_prob))
+        mdl_pred_logit = to_safe_logit(pred_prob)
 
         test_sign = 1 if test_greater else -1
         null_prob = make_prob(pred_prob + self.tolerance_prob * test_sign)
@@ -1121,7 +1202,7 @@ class CVScoreTwoSided(CVTestingTwoSided, SplitScoreTwoSided):
         """
         Calculate feature importance, relative to test statistic
         """
-        pred_prob = orig_ml_mdl.predict_proba(test_X)[:,1]
+        pred_prob = orig_ml_mdl.predict_proba(test_X[:, orig_ml_mdl.train_axes])[:,1]
         test_X_aug = self._get_x_features(test_X, pred_prob)
         
         residuals_greater = self._get_residual(test_Y, pred_prob, test_greater=True).reshape((-1,1))

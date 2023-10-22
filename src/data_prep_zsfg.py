@@ -30,7 +30,7 @@ def parse_args():
         default=0.75
     )
     parser.add_argument(
-        "--data-file",
+        "--data-files",
         type=str,
         default="exp_zsfg/zsfg_data_tiny.csv",
     )
@@ -45,6 +45,7 @@ def parse_args():
         default="_output/logSEED.txt",
     )
     args = parser.parse_args()
+    args.data_files = args.data_files.split(",")
     args.out_file = args.out_file_template.replace('SEED', str(args.seed))
     args.log_file = args.log_file_template.replace('SEED', str(args.seed))
     return args
@@ -88,7 +89,7 @@ def main():
     )
     logging.info(args)
 
-    dat_df = pd.read_parquet(args.data_file)
+    dat_df = pd.concat([pd.read_parquet(data_file) for data_file in args.data_files])
     logging.info("orig dat_df %s", dat_df.shape)
     np.random.seed(args.seed)
 
@@ -96,8 +97,9 @@ def main():
     sampled_df = sample_data(dat_df)
     logging.info("sampled dat_df %s", sampled_df.shape)
 
-    y = sampled_df["y_death"].to_numpy()
-    X = sampled_df.iloc[:, ~sampled_df.columns.isin(["y_death", "y_unplanned_adm", "pat_id_surrogate", "contact_date"])]
+    y = sampled_df["y_unplanned_readmission"].to_numpy()
+    outcome_cols = [col_name for col_name in sampled_df.columns if col_name.startswith("y_")] + ["contact_date", "pat_id_surrogate"]
+    X = sampled_df.iloc[:, ~sampled_df.columns.isin(outcome_cols)]
     make_sparse_boolean_columns(X)
     pat_ids = sampled_df.pat_id_surrogate
     # Feature transformations, imputations, etc
@@ -120,15 +122,23 @@ def main():
         ),
         (
             categorical_transformer,
+            make_column_selector(
+                pattern="^index_discharge_*", dtype_exclude=[np.number, "boolean"]
+            ),
+        ),
+        (
+            categorical_transformer,
             make_column_selector(pattern="^ept*", dtype_exclude=[np.number, "boolean"]),
         ),
         (
             categorical_transformer,
-            make_column_selector(pattern="^sdoh_flow*", dtype_exclude=[np.number, "boolean"]),
+            make_column_selector(
+                pattern="^sdoh_*", dtype_exclude=[np.number, "boolean"]
+            ),
         ),
         (
             categorical_transformer,
-            make_column_selector(pattern="^lab*", dtype_exclude=[np.number, "boolean"])
+            make_column_selector(pattern="^lab*", dtype_exclude=[np.number, "boolean"]),
         ),
         n_jobs=1,
         remainder='passthrough',
@@ -149,6 +159,7 @@ def main():
     all_patients = np.random.choice(all_patients, all_patients.size, replace=False)
     train_patients = all_patients[:int(all_patients.size * args.train_frac)]
     test_patients = all_patients[int(all_patients.size * args.train_frac):]
+    logging.info("train patients %s", train_patients)
     train_idx = pat_ids.isin(train_patients)
     test_idx = pat_ids.isin(test_patients)
     logging.info("num train %d", train_idx.sum())

@@ -2,7 +2,6 @@ import os
 import re
 import time
 import argparse
-import pprint
 import pickle
 import logging
 import json
@@ -16,7 +15,7 @@ import seaborn as sns
 from sklearn.kernel_approximation import Nystroem
 from sklearn.pipeline import Pipeline
 from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 
 from common import *
 from detector import *
@@ -33,6 +32,7 @@ def parse_args():
     parser.add_argument(
         "--detection-models",
         type=str,
+        default="LogisticRegression",
         help="comma-separated strings indicating which residual models to fit",
     )
     parser.add_argument(
@@ -48,6 +48,7 @@ def parse_args():
         default="CVScore",
         help="Which test to run",
         choices=[
+            "Widmann",
             "SplitScore",
             "SplitScoreTwoSided",
             "CVScore",
@@ -93,6 +94,7 @@ def parse_args():
         type=str,
         default="greater",
         choices=["greater", "less", "both"],
+        help="alternative = greater means the alternative is that the true prob is greater than the predicted prob beyond the tolerance level, etc"
     )
     parser.add_argument(
         "--feature-subset-regex",
@@ -170,7 +172,7 @@ def load_test_data(args):
         if "mu" in data_dict["test"]
         else None
     )
-
+    
     test_axes = np.ones(np_X.shape[1], dtype=bool)
     if args.feature_subset_regex is not None:
         test_axes = np.array(
@@ -179,7 +181,7 @@ def load_test_data(args):
                 for w in feature_names
             ]
         )
-
+    
     return (
         np_X[shuffle_idx],
         np_Y[shuffle_idx],
@@ -193,7 +195,7 @@ def print_diagnostics(ml_mdl, np_X, true_mu, tolerance_prob):
     """
     Random testing just for sanity checks
     """
-    pred_prob = ml_mdl.predict_proba(np_X)[:, 1]
+    pred_prob = ml_mdl.predict_proba(np_X[:, ml_mdl.train_axes])[:, 1]
     null_prob = make_prob(pred_prob + tolerance_prob)
     true_grouping = true_mu > null_prob
     residuals = true_mu - pred_prob
@@ -221,6 +223,12 @@ def create_detector(feature_names, test_axes, args):
     print("NJOBS", n_jobs)
 
     detection_mdl_dict = {}
+    if "GradientBoostingRegressor" in args.detection_models:
+        detection_mdl_dict["GradientBoostingRegressor"] = GradientBoostingRegressor(
+            random_state=0
+        )
+    if "LogisticRegression" in args.detection_models:
+        detection_mdl_dict["LogisticRegression"] = LogisticRegression(solver="liblinear")
     if "RandomForestRegressor" in args.detection_models:
         detection_mdl_dict["RandomForestRegressor"] = RandomForestRegressor(
             n_jobs=n_jobs, random_state=0
@@ -347,6 +355,13 @@ def create_detector(feature_names, test_axes, args):
             tolerance_prob=args.tolerance_prob,
             alternative=args.alternative,
         )
+    elif args.detector == "Widmann":
+        detector = WidmannKernelTest(
+            args.axes,
+            args.n_boot,
+            tolerance_prob=args.tolerance_prob,
+            alternative=args.alternative,
+        )
 
     return detector
 
@@ -368,6 +383,9 @@ def main():
 
     # Load test data
     np_X, np_Y, true_mu, feature_names, test_axes = load_test_data(args)
+    # Grandfather in old models
+    if not hasattr(ml_mdl, 'train_axes'):
+        ml_mdl.train_axes = np.ones(np_X.shape[1], dtype=bool)
 
     # Print some diagnostics
     if true_mu is not None:
@@ -388,6 +406,7 @@ def main():
 
     print(res)
     logging.info(res[["method", "pval"]])
+    print(res[["method", "pval"]])
     res.to_csv(args.res_file, index=False)
 
     # Save results

@@ -3,7 +3,6 @@ import argparse
 import logging
 
 import scipy.stats as stats
-import statsmodels.api as sm
 import pandas as pd
 import numpy as np
 
@@ -90,6 +89,7 @@ def main():
         all_res.to_csv(args.csv_file, index=False)
 
     if args.pval_plot:
+        import statsmodels.api as sm
         print(np.sort(all_res[all_res.method == "maxw_vec"].pval))
         print(np.sort(all_res[all_res.method == "max_vec"].pval))
         pplot = sm.ProbPlot(all_res[all_res.method == "max_vec"].pval, dist=stats.uniform)

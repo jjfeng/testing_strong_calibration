@@ -90,6 +90,7 @@ def main():
     # plot!
     sns.set_context('paper', font_scale=1.8)
     detector.plot(plot_df, args.plot_output_file)
+    print(args.plot_output_file)
 
 if __name__ == "__main__":
     main()

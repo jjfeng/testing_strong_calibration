@@ -5,25 +5,36 @@ import argparse
 import numpy as np
 import pandas as pd
 
+import matplotlib
 import seaborn as sns
 from matplotlib import pyplot as plt
 
-PLOT_STATS = ['last_gval', 'max_gval', 'hl_2', 'hl_10', 'adaptchisq_2', 'adaptchisq_10']
 PLOT_DICT = {
-    'CVScoreTwoSided_KernelLogistic_RandomForestRegressor_last_gval': 'AdaptiveScoreSimple',
-    'CVScoreTwoSided_RandomForestRegressor_KernelLogistic_last_gval': 'AdaptiveScoreSimple',
-    'CVScore_RandomForestRegressor_KernelLogistic_last_gval': 'AdaptiveScoreSimple',
-    'CVScoreTwoSided_KernelLogistic_RandomForestRegressor_max_gval': 'AdaptiveScoreCUSUM',
-    'CVScoreTwoSided_RandomForestRegressor_KernelLogistic_max_gval': 'AdaptiveScoreCUSUM',
-    'CVScore_RandomForestRegressor_KernelLogistic_max_gval': 'AdaptiveScoreCUSUM',
+    'SplitScore_RandomForestRegressor_KernelLogistic_last_gval': 'Multicalib',
+    'SplitScoreTwoSided_KernelLogistic_RandomForestRegressor_last_gval': 'Multicalib',
+    'SplitScore_KernelLogistic_last_gval': 'Multicalib',
+    'CVScoreTwoSided_KernelLogistic_RandomForestRegressor_last_gval': 'AdaptScoreSimple',
+    'CVScoreTwoSided_RandomForestRegressor_KernelLogistic_last_gval': 'AdaptScoreSimple',
+    'CVScore_RandomForestRegressor_KernelLogistic_last_gval': 'AdaptScoreSimple',
+    'CVScore_KernelLogistic_last_gval': 'AdaptScoreSimple',
+    'CVScoreTwoSided_KernelLogistic_RandomForestRegressor_max_gval': 'AdaptScoreCUSUM',
+    'CVScoreTwoSided_RandomForestRegressor_KernelLogistic_max_gval': 'AdaptScoreCUSUM',
+    'CVScore_RandomForestRegressor_KernelLogistic_max_gval': 'AdaptScoreCUSUM',
+    'CVScore_KernelLogistic_max_gval': 'AdaptScoreCUSUM',
     'LogisticRecalibrationTwoSided_None_max_gval': 'PrespecScore',
     'LogisticRecalibration_None_max_gval': 'PrespecScore',
+    'LogisticRecalibration_KernelLogistic_max_gval': 'PrespecScore',
+    'Widmann_None_widmann': 'KernelTest',
     'HosmerLemeshow_None_hl_2': 'PrespecChiSq (bins=2)',
     'HosmerLemeshow_None_hl_10': 'PrespecChiSq (bins=10)',
+    'HosmerLemeshow_KernelLogistic_hl_2': 'PrespecChiSq (bins=2)',
+    'HosmerLemeshow_KernelLogistic_hl_10': 'PrespecChiSq (bins=10)',
     'CVChiSquaredTwoSided_KernelLogistic_RandomForestRegressor_adaptchisq_2': 'AdaptChiSq (bins=2)',
     'CVChiSquared_RandomForestRegressor_KernelLogistic_adaptchisq_2': 'AdaptChiSq (bins=2)',
+    'CVChiSquared_KernelLogistic_adaptchisq_2': 'AdaptChiSq (bins=2)',
     'CVChiSquaredTwoSided_KernelLogistic_RandomForestRegressor_adaptchisq_10': 'AdaptChiSq (bins=10)',
     'CVChiSquared_RandomForestRegressor_KernelLogistic_adaptchisq_10': 'AdaptChiSq (bins=10)',
+    'CVChiSquared_KernelLogistic_adaptchisq_10': 'AdaptChiSq (bins=10)',
 }
 
 def parse_args():
@@ -58,7 +69,7 @@ def parse_args():
     parser.add_argument(
         "--log-file",
         type=str,
-        default="log.txt",
+        default="_output/log.txt",
     )
     parser.add_argument(
         "--tex-file",
@@ -68,6 +79,7 @@ def parse_args():
     parser.add_argument(
         "--csv-file",
         type=str,
+        default="_output/res.csv",
     )
     parser.add_argument(
         "--do-agg",
@@ -133,9 +145,11 @@ def main():
     if args.plot_file is not None:
         all_res['detector_method'] = all_res.detector + "_" + all_res.method
         all_res['detector_method'] = all_res['detector_method'].replace(PLOT_DICT)
+        
         all_res = all_res.rename({'detector_method': 'Test'}, axis=1)
-        all_res['alternative'] = all_res['alternative'].replace({'less':
-            'over-estimates', 'greater': 'under-estimates', 'both': 'both'})
+        if 'alternative' in all_res.columns:
+            all_res['alternative'] = all_res['alternative'].replace({'less':
+                'over-estimates', 'greater': 'under-estimates', 'both': 'both'})
         
         plt.figure(figsize=(10,5))
         sns.set_context('paper', font_scale=1.8)
@@ -155,9 +169,14 @@ def main():
             markers=True,
             linewidth=3,
             legend=not args.proposed_only,
+            facet_kws={"sharex":False}
         )
         for g in ax.axes.flat:
+            #g.set(xscale="log")
+            if args.type_i_error:
+                g.axhline(y = 0.1, color = 'r', linestyle = '--')
             g.set_xticks(args.x_ticks)
+            g.get_xaxis().set_major_formatter(matplotlib.ticker.ScalarFormatter())
         # update to pretty axes and titles
         ax.set_axis_labels(
             "n",
