@@ -1,7 +1,5 @@
 # Code for "Is this model reliable for everyone? Testing for strong calibration"
 
-Feng, Jean, Alexej Gossmann, Romain Pirracchio, Nicholas Petrick, Gene Pennello, and Berkman Sahiner. 2023. “Is This Model Reliable for Everyone? Testing for Strong Calibration.” arXiv [cs.LG]. arXiv. http://arxiv.org/abs/2307.15247.
-
 This folder contains all the code for reproducing experiments from the manuscript.
 
 ## General organization of the code:
@@ -15,10 +13,7 @@ This folder contains all the code for reproducing experiments from the manuscrip
 * Folders specify how experiments are run
 
 ## Reproducing experiments
-We run experiments using the `nestly` and `scons` framework. In particular,
-* `scons simulation_power_mini` will run simulations from Section 3.
-* `scons exp_zsfg` will perform the real-world data analysis in Section 4. Because we cannot share the electronic health record data used in this experiment, the code will not run. Nevertheless, one can see the code itself.
-* `scons simulation_null` will run the simulations from Section 4 of the Appendix.
+We run experiments using the `nestly` and `scons` framework.
 
 ## Running unittests:
 Code is in `test.py`. Run `python -m unittest`.
